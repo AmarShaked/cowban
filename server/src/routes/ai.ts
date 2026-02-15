@@ -1,7 +1,9 @@
 // server/src/routes/ai.ts
 import { Router } from "express";
+import type { KanbanItem, ActionPayload } from "@daily-kanban/shared";
 import type { CardRepo } from "../db/card-repo.js";
 import { ClaudeEvaluator } from "../ai/claude-evaluator.js";
+import type { ConnectorRegistry } from "../connectors/registry.js";
 
 const AVAILABLE_ACTIONS: Record<string, string[]> = {
   gmail: ["reply", "archive", "label"],
@@ -15,6 +17,7 @@ const AVAILABLE_ACTIONS: Record<string, string[]> = {
 export function createAiRouter(
   cardRepo: CardRepo,
   evaluator: ClaudeEvaluator,
+  registry: ConnectorRegistry,
   confidenceThreshold: number = 80
 ): Router {
   const router = Router();
@@ -45,6 +48,48 @@ export function createAiRouter(
         proposed_action: evaluation.proposedAction,
         action_payload: null,
       });
+    }
+
+    const updated = cardRepo.getById(cardId);
+    res.json(updated);
+  });
+
+  router.post("/execute/:cardId", async (req, res) => {
+    const cardId = Number(req.params.cardId);
+    const card = cardRepo.getById(cardId);
+
+    if (!card) {
+      res.status(404).json({ error: "Card not found" });
+      return;
+    }
+
+    if (!card.action_payload) {
+      res.status(400).json({ error: "No action payload" });
+      return;
+    }
+
+    const connector = registry.get(card.source_type);
+    if (!connector) {
+      res.status(400).json({ error: `No connector for ${card.source_type}` });
+      return;
+    }
+
+    const item: KanbanItem = {
+      source_id: card.source_id!,
+      source_type: card.source_type,
+      title: card.title,
+      body: card.body,
+      metadata: card.metadata || {},
+    };
+
+    const result = await connector.executeAction(item, card.action_payload as ActionPayload);
+
+    if (result.success) {
+      cardRepo.setExecutionResult(cardId, result.message);
+      cardRepo.moveToColumn(cardId, "done");
+    } else {
+      cardRepo.setExecutionResult(cardId, `Failed: ${result.message}`);
+      cardRepo.moveToColumn(cardId, "review");
     }
 
     const updated = cardRepo.getById(cardId);

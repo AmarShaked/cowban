@@ -35,4 +35,7 @@ export const api = {
 
   evaluateCard: (cardId: number) =>
     fetchJson<Card>(`/ai/evaluate/${cardId}`, { method: "POST" }),
+
+  executeCard: (cardId: number) =>
+    fetchJson<Card>(`/ai/execute/${cardId}`, { method: "POST" }),
 };
