@@ -1,6 +1,7 @@
 // server/src/ai/claude-evaluator.ts
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
+import { StreamJsonParser, type ParsedEvent } from "./stream-json-parser.js";
 import type { Card, AiEvaluation } from "@daily-kanban/shared";
 
 const execFileAsync = promisify(execFile);
@@ -40,6 +41,14 @@ function validateEvaluation(obj: Record<string, unknown>): AiEvaluation {
     actionPayload:
       (obj.actionPayload as AiEvaluation["actionPayload"]) ?? null,
   };
+}
+
+export interface ExecutionCallbacks {
+  onText: (text: string) => void;
+  onToolStart: (toolName: string) => void;
+  onToolComplete: (toolName: string, input: Record<string, unknown>) => void;
+  onInit: (sessionId: string) => void;
+  onResult: (status: string, sessionId?: string) => void;
 }
 
 export class ClaudeEvaluator {
@@ -246,5 +255,60 @@ Respond with ONLY a JSON object (no extra text):
 If you can confidently handle this with one of the available actions, set canAutomate to true and provide the action details. If not, set canAutomate to false.`;
 
     return prompt;
+  }
+
+  executeWithStreamJson(
+    prompt: string,
+    cwd: string,
+    callbacks: ExecutionCallbacks,
+    sessionId?: string,
+  ): { child: import("child_process").ChildProcess; promise: Promise<void> } {
+    const args = sessionId
+      ? ["--resume", sessionId, "-p", prompt, "--output-format", "stream-json"]
+      : ["-p", prompt, "--output-format", "stream-json", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep"];
+
+    const child = spawn("claude", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 300000,
+    });
+
+    const parser = new StreamJsonParser((event: ParsedEvent) => {
+      switch (event.type) {
+        case "init":
+          callbacks.onInit(event.sessionId);
+          break;
+        case "text":
+          callbacks.onText(event.text);
+          break;
+        case "tool_use_start":
+          callbacks.onToolStart(event.toolName);
+          break;
+        case "tool_use_complete":
+          callbacks.onToolComplete(event.toolName, event.input);
+          break;
+        case "result":
+          callbacks.onResult(event.status, event.sessionId);
+          break;
+      }
+    });
+
+    child.stdout!.on("data", (data: Buffer) => {
+      parser.feed(data.toString());
+    });
+
+    child.stderr!.on("data", (data: Buffer) => {
+      console.error("Claude execute stderr:", data.toString());
+    });
+
+    const promise = new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+      child.on("error", (err) => {
+        console.error("Claude execute spawn error:", err);
+        resolve();
+      });
+    });
+
+    return { child, promise };
   }
 }
