@@ -4,6 +4,7 @@ import { getDb } from "./db/database.js";
 import { BoardRepo } from "./db/board-repo.js";
 import { CardRepo } from "./db/card-repo.js";
 import { SettingsRepo } from "./db/settings-repo.js";
+import { LogRepo } from "./db/log-repo.js";
 import { createBoardRouter } from "./routes/board.js";
 import { createCardsRouter } from "./routes/cards.js";
 import { createAiRouter } from "./routes/ai.js";
@@ -30,6 +31,7 @@ const db = getDb();
 const boardRepo = new BoardRepo(db);
 const cardRepo = new CardRepo(db);
 const settingsRepo = new SettingsRepo(db);
+const logRepo = new LogRepo(db);
 
 // --- Connectors ---
 const registry = new ConnectorRegistry();
@@ -65,7 +67,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/board", createBoardRouter(boardRepo, cardRepo));
 app.use("/api/cards", createCardsRouter(cardRepo, boardRepo));
-app.use("/api/ai", createAiRouter(cardRepo, evaluator, registry, db, settingsRepo));
+app.use("/api/ai", createAiRouter(cardRepo, evaluator, registry, db, settingsRepo, logRepo));
 app.use("/api/settings", createSettingsRouter(settingsRepo));
 app.use("/api/repos", createReposRouter(settingsRepo));
 // --- Scheduler ---

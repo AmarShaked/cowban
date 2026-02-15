@@ -7,6 +7,8 @@ import { ClaudeEvaluator } from "../ai/claude-evaluator.js";
 import type { ConnectorRegistry } from "../connectors/registry.js";
 import { WorktreeManager } from "../git/worktree-manager.js";
 import type { SettingsRepo } from "../db/settings-repo.js";
+import type { LogRepo } from "../db/log-repo.js";
+import type { TodoItem, QuestionEvent } from "@daily-kanban/shared";
 
 const AVAILABLE_ACTIONS: Record<string, string[]> = {
   gmail: ["reply", "archive", "delete", "label"],
@@ -36,10 +38,17 @@ export function createAiRouter(
   registry: ConnectorRegistry,
   db: Database.Database,
   settingsRepo: SettingsRepo,
+  logRepo: LogRepo,
   confidenceThreshold: number = 80
 ): Router {
   const worktreeManager = new WorktreeManager();
   const router = Router();
+
+  router.get("/logs/:cardId", (req, res) => {
+    const cardId = Number(req.params.cardId);
+    const logs = logRepo.listByCard(cardId);
+    res.json({ logs });
+  });
 
   router.post("/evaluate/:cardId", async (req, res) => {
     const cardId = Number(req.params.cardId);
@@ -247,50 +256,98 @@ export function createAiRouter(
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Clear any previous logs for this card before new execution
+    logRepo.deleteByCard(cardId);
+    cardRepo.setMetadataField(cardId, "execution_status", "running");
+
+    const persistAndSend = (step: string, message: string, sessionId: string | null, data: Record<string, unknown> | null, extra?: Record<string, unknown>) => {
+      logRepo.insert(cardId, step, message, sessionId, data);
+      send({ step, message, ...extra, ...(data ? { data } : {}) });
+    };
+
     try {
-      send({ step: "start", message: "Starting code execution..." });
-      send({ step: "executing", message: `Running Claude Code in ${repo.name}...` });
+      persistAndSend("start", "Starting code execution...", null, null);
+      persistAndSend("executing", `Running Claude Code in ${repo.name}...`, null, null);
 
       const plan = card.body || "";
+      const prompt = `Execute this implementation plan in the current repository.\n\nPlan:\n${plan}\n\nImplement all changes described. Run tests if applicable.`;
 
-      const { spawn } = await import("child_process");
-      const child = spawn(
-        "claude",
-        [
-          "-p",
-          `Execute this implementation plan in the current repository.\n\nPlan:\n${plan}\n\nImplement all changes described. Run tests if applicable.`,
-          "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep",
-        ],
-        { cwd: worktreePath, stdio: ["ignore", "pipe", "pipe"], timeout: 300000 },
+      const existingSessionId = card.metadata?.session_id as string | undefined;
+      let currentSessionId = existingSessionId || null;
+      let textBuffer = "";
+      let paused = false;
+
+      const { child, promise } = evaluator.executeWithStreamJson(
+        prompt,
+        worktreePath,
+        {
+          onInit: (sessionId) => {
+            currentSessionId = sessionId;
+            cardRepo.setMetadataField(cardId, "session_id", sessionId);
+          },
+          onText: (text) => {
+            textBuffer += text;
+            if (textBuffer.length > 200 || text.includes("\n")) {
+              persistAndSend("ai_output", textBuffer, currentSessionId, null);
+              textBuffer = "";
+            }
+          },
+          onToolStart: (_toolName) => {},
+          onToolComplete: (toolName, input) => {
+            if (toolName === "TaskCreate" || toolName === "TaskUpdate") {
+              const todoData: Record<string, unknown> = {
+                id: (input as Record<string, unknown>).subject || (input as Record<string, unknown>).taskId || "unknown",
+                subject: (input as Record<string, unknown>).subject as string || "Task",
+                status: (input as Record<string, unknown>).status as string || "pending",
+              };
+              persistAndSend("todo", `Task: ${todoData.subject}`, currentSessionId, todoData);
+            } else if (toolName === "AskUserQuestion") {
+              if (textBuffer) {
+                persistAndSend("ai_output", textBuffer, currentSessionId, null);
+                textBuffer = "";
+              }
+              const questions = (input.questions as Array<Record<string, unknown>>) || [];
+              const firstQ = questions[0] || {};
+              const questionData: Record<string, unknown> = {
+                question: firstQ.question || "Claude needs your input",
+                header: firstQ.header || "",
+                options: firstQ.options || [],
+                multiSelect: firstQ.multiSelect || false,
+              };
+              const logEntry = logRepo.insert(cardId, "question", questionData.question as string, currentSessionId, questionData);
+              send({ step: "question", message: questionData.question as string, data: { ...questionData, questionId: logEntry.id } });
+              cardRepo.setMetadataField(cardId, "execution_status", "paused_question");
+              paused = true;
+              child.kill("SIGTERM");
+            }
+          },
+          onResult: (_status, sessionId) => {
+            if (sessionId) {
+              currentSessionId = sessionId;
+              cardRepo.setMetadataField(cardId, "session_id", sessionId);
+            }
+          },
+        },
+        existingSessionId,
       );
 
-      child.stdout.on("data", (data: Buffer) => {
-        send({ step: "ai_output", message: data.toString() });
-      });
+      await promise;
 
-      child.stderr.on("data", (data: Buffer) => {
-        console.error("Claude execute stderr:", data.toString());
-      });
+      if (textBuffer) {
+        persistAndSend("ai_output", textBuffer, currentSessionId, null);
+        textBuffer = "";
+      }
 
-      await new Promise<void>((resolve) => {
-        child.on("close", (code) => {
-          if (code !== 0) {
-            send({ step: "error", message: `Claude Code exited with code ${code}` });
-          }
-          resolve();
-        });
-        child.on("error", (err) => {
-          send({ step: "error", message: `Spawn error: ${err.message}` });
-          resolve();
-        });
-      });
+      if (paused) {
+        res.end();
+        return;
+      }
 
-      // Commit changes
-      send({ step: "executing", message: "Committing changes..." });
+      // Normal completion — commit, PR, cleanup
+      persistAndSend("executing", "Committing changes...", currentSessionId, null);
       await worktreeManager.commit(worktreePath, `feat: ${card.title}`);
 
-      // Create PR
-      send({ step: "executing", message: "Creating pull request..." });
+      persistAndSend("executing", "Creating pull request...", currentSessionId, null);
       let prUrl = "";
       try {
         prUrl = await worktreeManager.createPR(
@@ -298,26 +355,183 @@ export function createAiRouter(
           card.title,
           `## Summary\n\n${card.proposed_action}\n\n## Plan\n\n${plan}\n\n---\nGenerated by Daily Kanban AI`,
         );
-        send({ step: "executed", message: `PR created: ${prUrl}` });
+        persistAndSend("executed", `PR created: ${prUrl}`, currentSessionId, null);
       } catch (err) {
-        send({ step: "error", message: `PR creation failed: ${(err as Error).message}` });
+        persistAndSend("error", `PR creation failed: ${(err as Error).message}`, currentSessionId, null);
       }
 
-      // Clean up worktree
-      send({ step: "executing", message: "Cleaning up worktree..." });
+      persistAndSend("executing", "Cleaning up worktree...", currentSessionId, null);
       await worktreeManager.remove(worktreePath);
       cardRepo.setMetadataField(cardId, "worktree_path", null);
 
-      // Update card
       cardRepo.setExecutionResult(cardId, prUrl ? `PR: ${prUrl}` : "Code changes committed");
       cardRepo.moveToColumn(cardId, "done");
+      cardRepo.setMetadataField(cardId, "execution_status", "completed");
 
       const updated = cardRepo.getById(cardId);
-      send({ step: "done", message: prUrl ? `Done! PR: ${prUrl}` : "Done!", card: updated });
+      persistAndSend("done", prUrl ? `Done! PR: ${prUrl}` : "Done!", currentSessionId, null, { card: updated });
     } catch (err) {
       console.error("Execute-code error:", err);
-      send({ step: "error", message: "Code execution failed" });
-      send({ step: "done", message: "Execution failed", card: cardRepo.getById(cardId) });
+      cardRepo.setMetadataField(cardId, "execution_status", "failed");
+      persistAndSend("error", "Code execution failed", null, null);
+      persistAndSend("done", "Execution failed", null, null, { card: cardRepo.getById(cardId) });
+    }
+
+    res.end();
+  });
+
+  router.post("/answer/:cardId", async (req, res) => {
+    const cardId = Number(req.params.cardId);
+    const card = cardRepo.getById(cardId);
+    const { answer } = req.body as { answer: string };
+
+    if (!card) {
+      res.status(404).json({ error: "Card not found" });
+      return;
+    }
+
+    const sessionId = card.metadata?.session_id as string | undefined;
+    if (!sessionId) {
+      res.status(400).json({ error: "No active session to resume" });
+      return;
+    }
+
+    const worktreePath = card.metadata?.worktree_path as string | undefined;
+    const repoId = card.metadata?.repo_id as string | undefined;
+    if (!worktreePath || !repoId) {
+      res.status(400).json({ error: "Card has no worktree or repo" });
+      return;
+    }
+
+    const repos = settingsRepo.get<{ id: string; name: string; path: string }[]>("repos", []);
+    const repo = repos.find((r) => r.id === repoId);
+    if (!repo) {
+      res.status(400).json({ error: "Assigned repo not found" });
+      return;
+    }
+
+    logRepo.insert(cardId, "answer", answer, sessionId, null);
+
+    // SSE setup — resuming execution
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (data: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    cardRepo.setMetadataField(cardId, "execution_status", "running");
+
+    const persistAndSend = (step: string, message: string, sid: string | null, data: Record<string, unknown> | null, extra?: Record<string, unknown>) => {
+      logRepo.insert(cardId, step, message, sid, data);
+      send({ step, message, ...extra, ...(data ? { data } : {}) });
+    };
+
+    try {
+      persistAndSend("start", `Resuming with answer: "${answer}"`, sessionId, null);
+
+      let currentSessionId = sessionId;
+      let textBuffer = "";
+      let paused = false;
+
+      const { child, promise } = evaluator.executeWithStreamJson(
+        answer,
+        worktreePath,
+        {
+          onInit: (sid) => {
+            currentSessionId = sid;
+            cardRepo.setMetadataField(cardId, "session_id", sid);
+          },
+          onText: (text) => {
+            textBuffer += text;
+            if (textBuffer.length > 200 || text.includes("\n")) {
+              persistAndSend("ai_output", textBuffer, currentSessionId, null);
+              textBuffer = "";
+            }
+          },
+          onToolStart: () => {},
+          onToolComplete: (toolName, input) => {
+            if (toolName === "TaskCreate" || toolName === "TaskUpdate") {
+              const todoData: Record<string, unknown> = {
+                id: (input as Record<string, unknown>).subject || (input as Record<string, unknown>).taskId || "unknown",
+                subject: (input as Record<string, unknown>).subject as string || "Task",
+                status: (input as Record<string, unknown>).status as string || "pending",
+              };
+              persistAndSend("todo", `Task: ${todoData.subject}`, currentSessionId, todoData);
+            } else if (toolName === "AskUserQuestion") {
+              if (textBuffer) {
+                persistAndSend("ai_output", textBuffer, currentSessionId, null);
+                textBuffer = "";
+              }
+              const questions = (input.questions as Array<Record<string, unknown>>) || [];
+              const firstQ = questions[0] || {};
+              const questionData: Record<string, unknown> = {
+                question: firstQ.question || "Claude needs your input",
+                header: firstQ.header || "",
+                options: firstQ.options || [],
+                multiSelect: firstQ.multiSelect || false,
+              };
+              const logEntry = logRepo.insert(cardId, "question", questionData.question as string, currentSessionId, questionData);
+              send({ step: "question", message: questionData.question as string, data: { ...questionData, questionId: logEntry.id } });
+              cardRepo.setMetadataField(cardId, "execution_status", "paused_question");
+              paused = true;
+              child.kill("SIGTERM");
+            }
+          },
+          onResult: (_status, sid) => {
+            if (sid) {
+              currentSessionId = sid;
+              cardRepo.setMetadataField(cardId, "session_id", sid);
+            }
+          },
+        },
+        sessionId,
+      );
+
+      await promise;
+
+      if (textBuffer) {
+        persistAndSend("ai_output", textBuffer, currentSessionId, null);
+      }
+
+      if (paused) {
+        res.end();
+        return;
+      }
+
+      persistAndSend("executing", "Committing changes...", currentSessionId, null);
+      await worktreeManager.commit(worktreePath, `feat: ${card.title}`);
+
+      persistAndSend("executing", "Creating pull request...", currentSessionId, null);
+      let prUrl = "";
+      try {
+        prUrl = await worktreeManager.createPR(
+          worktreePath,
+          card.title,
+          `## Summary\n\n${card.proposed_action}\n\n## Plan\n\n${card.body || ""}\n\n---\nGenerated by Daily Kanban AI`,
+        );
+        persistAndSend("executed", `PR created: ${prUrl}`, currentSessionId, null);
+      } catch (err) {
+        persistAndSend("error", `PR creation failed: ${(err as Error).message}`, currentSessionId, null);
+      }
+
+      persistAndSend("executing", "Cleaning up worktree...", currentSessionId, null);
+      await worktreeManager.remove(worktreePath);
+      cardRepo.setMetadataField(cardId, "worktree_path", null);
+
+      cardRepo.setExecutionResult(cardId, prUrl ? `PR: ${prUrl}` : "Code changes committed");
+      cardRepo.moveToColumn(cardId, "done");
+      cardRepo.setMetadataField(cardId, "execution_status", "completed");
+
+      const updated = cardRepo.getById(cardId);
+      persistAndSend("done", prUrl ? `Done! PR: ${prUrl}` : "Done!", currentSessionId, null, { card: updated });
+    } catch (err) {
+      console.error("Answer/resume error:", err);
+      cardRepo.setMetadataField(cardId, "execution_status", "failed");
+      persistAndSend("error", "Execution failed after resume", null, null);
+      persistAndSend("done", "Execution failed", null, null, { card: cardRepo.getById(cardId) });
     }
 
     res.end();
