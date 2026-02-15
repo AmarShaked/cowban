@@ -176,4 +176,63 @@ export const api = {
 
     return { abort: () => controller.abort() };
   },
+
+  getExecutionLogs: (cardId: number) =>
+    fetchJson<{ logs: import("@daily-kanban/shared").ExecutionLog[] }>(`/ai/logs/${cardId}`),
+
+  answerQuestion: (
+    cardId: number,
+    answer: string,
+    onEvent: (event: { step: string; message: string; card?: Card; data?: Record<string, unknown> }) => void,
+  ): { abort: () => void } => {
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(`${BASE}/ai/answer/${cardId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answer }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          onEvent({ step: "error", message: `API error: ${res.status}` });
+          onEvent({ step: "done", message: "Resume failed" });
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const event = JSON.parse(line.slice(6));
+                onEvent(event);
+              } catch {
+                // Skip malformed
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          onEvent({ step: "error", message: "Connection failed" });
+          onEvent({ step: "done", message: "Resume failed" });
+        }
+      }
+    })();
+
+    return { abort: () => controller.abort() };
+  },
 };
