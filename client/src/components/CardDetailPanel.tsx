@@ -1,9 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import type { Card } from "@daily-kanban/shared";
+import type { Card, TodoItem, QuestionEvent } from "@daily-kanban/shared";
 import Markdown from "react-markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { X, Mail, Calendar, GitMerge, Send, ListTodo, PenLine, ExternalLink, Loader2, CheckCircle2, AlertTriangle, Sparkles } from "lucide-react";
+import {
+  X, Mail, Calendar, GitMerge, Send, ListTodo, PenLine, ExternalLink,
+  Loader2, CheckCircle2, AlertTriangle, Sparkles, ChevronDown, ChevronRight,
+  MessageCircleQuestion, CircleDot, Circle, CheckCircle,
+} from "lucide-react";
 
 const sourceIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   gmail: Mail,
@@ -26,25 +30,36 @@ const sourceLabels: Record<string, string> = {
 export interface ProcessingLog {
   step: string;
   message: string;
+  data?: Record<string, unknown>;
 }
 
 interface CardDetailPanelProps {
   card: Card;
   onClose: () => void;
   processingLogs?: ProcessingLog[];
+  todos?: TodoItem[];
+  activeQuestion?: QuestionEvent | null;
+  isLiveProcessing?: boolean;
   onProcess?: (customRequest?: string) => void;
   onExecuteCode?: () => void;
+  onAnswerQuestion?: (answer: string) => void;
   repos?: { id: string; name: string; path: string }[];
   defaultRepoId?: string | null;
   onRepoChange?: (repoId: string) => void;
 }
 
-export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onExecuteCode, repos, defaultRepoId, onRepoChange }: CardDetailPanelProps) {
+export function CardDetailPanel({
+  card, onClose, processingLogs, todos, activeQuestion, isLiveProcessing,
+  onProcess, onExecuteCode, onAnswerQuestion, repos, defaultRepoId, onRepoChange,
+}: CardDetailPanelProps) {
   const Icon = sourceIcons[card.source_type] || PenLine;
   const externalUrl = card.metadata?.url as string | undefined;
 
   const [customRequest, setCustomRequest] = useState("");
+  const [answerText, setAnswerText] = useState("");
   const [width, setWidth] = useState(400);
+  const [logsExpanded, setLogsExpanded] = useState(true);
+  const [todosExpanded, setTodosExpanded] = useState(true);
   const dragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -78,14 +93,18 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
     document.addEventListener("pointerup", onUp);
   }, [width]);
 
-  const isProcessing = processingLogs && processingLogs.length > 0 && !processingLogs.some(l => l.step === "done");
+  const isProcessing = isLiveProcessing && processingLogs && processingLogs.length > 0 && !processingLogs.some(l => l.step === "done");
+  const hasLogs = processingLogs && processingLogs.length > 0;
+  const hasTodos = todos && todos.length > 0;
+  const executionStatus = card.metadata?.execution_status as string | undefined;
+
+  const planChecklist = parsePlanChecklist(card.body);
 
   return (
     <div
       className="absolute right-0 top-0 bottom-0 flex bg-background border-l shadow-xl z-10"
       style={{ width }}
     >
-      {/* Resize handle */}
       <div
         className="w-1.5 cursor-col-resize hover:bg-accent/50 active:bg-accent shrink-0"
         onPointerDown={onResizePointerDown}
@@ -99,6 +118,11 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
             {card.confidence !== null && (
               <Badge variant={card.confidence >= 80 ? "default" : "secondary"}>
                 {card.confidence}%
+              </Badge>
+            )}
+            {executionStatus && (
+              <Badge variant={executionStatus === "paused_question" ? "destructive" : executionStatus === "running" ? "default" : "secondary"}>
+                {executionStatus.replace("_", " ")}
               </Badge>
             )}
           </div>
@@ -149,6 +173,25 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
             </div>
           )}
 
+          {planChecklist.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium mb-2">Plan Checklist</h3>
+              <div className="space-y-1">
+                {planChecklist.map((item, i) => (
+                  <label key={i} className="flex items-start gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={item.checked}
+                      className="mt-0.5 rounded"
+                      readOnly
+                    />
+                    <span className={item.checked ? "line-through text-muted-foreground" : ""}>{item.text}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
           {onProcess && (
             <div>
               <h3 className="text-sm font-medium mb-1">AI Request</h3>
@@ -183,7 +226,7 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
             </div>
           )}
 
-          {card.column_name === "review" && card.metadata?.repo_id && onExecuteCode && !isProcessing && (
+          {card.column_name === "review" && !!card.metadata?.repo_id && onExecuteCode && !isProcessing && (
             <Button onClick={onExecuteCode} className="w-full">
               Execute Code Changes
             </Button>
@@ -196,19 +239,102 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
             </div>
           )}
 
-          {/* AI Processing Logs */}
-          {processingLogs && processingLogs.length > 0 && (
+          {hasTodos && (
             <div>
-              <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
-                AI Processing
-                {isProcessing && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-              </h3>
-              <div className="space-y-1.5 text-xs">
-                {processingLogs.map((log, i) => (
-                  <LogEntry key={i} log={log} />
-                ))}
-                <div ref={logsEndRef} />
+              <button
+                onClick={() => setTodosExpanded(!todosExpanded)}
+                className="flex items-center gap-1 text-sm font-medium mb-2 hover:text-foreground"
+              >
+                {todosExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                Tasks ({todos!.length})
+              </button>
+              {todosExpanded && (
+                <div className="space-y-1.5">
+                  {todos!.map((todo, i) => (
+                    <div key={todo.id || i} className="flex items-center gap-2 text-sm">
+                      <TodoStatusIcon status={todo.status} />
+                      <span className={todo.status === "completed" ? "line-through text-muted-foreground" : ""}>
+                        {todo.subject}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeQuestion && onAnswerQuestion && (
+            <div className="rounded-lg border-2 border-amber-500/50 bg-amber-50 dark:bg-amber-950/20 p-4 space-y-3">
+              <div className="flex items-start gap-2">
+                <MessageCircleQuestion className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  {activeQuestion.header && (
+                    <span className="text-xs font-medium text-amber-600 dark:text-amber-400 uppercase tracking-wide">{activeQuestion.header}</span>
+                  )}
+                  <p className="text-sm font-medium">{activeQuestion.question}</p>
+                </div>
               </div>
+
+              {activeQuestion.options && activeQuestion.options.length > 0 && (
+                <div className="space-y-1.5 pl-6">
+                  {activeQuestion.options.map((opt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        onAnswerQuestion(opt.label);
+                        setAnswerText("");
+                      }}
+                      className="w-full text-left rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                    >
+                      <span className="font-medium">{opt.label}</span>
+                      {opt.description && <span className="text-muted-foreground ml-1">— {opt.description}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (answerText.trim()) {
+                    onAnswerQuestion(answerText.trim());
+                    setAnswerText("");
+                  }
+                }}
+                className="flex gap-2 pl-6"
+              >
+                <input
+                  type="text"
+                  value={answerText}
+                  onChange={(e) => setAnswerText(e.target.value)}
+                  placeholder="Type a custom answer..."
+                  className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+                <Button type="submit" size="sm" disabled={!answerText.trim()}>
+                  Send
+                </Button>
+              </form>
+            </div>
+          )}
+
+          {hasLogs && (
+            <div>
+              <button
+                onClick={() => setLogsExpanded(!logsExpanded)}
+                className="flex items-center gap-1 text-sm font-medium mb-2 hover:text-foreground"
+              >
+                {logsExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                Execution Logs
+                {isProcessing && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground ml-1" />}
+              </button>
+              {logsExpanded && (
+                <div className="space-y-1.5 text-xs">
+                  {processingLogs!.map((log, i) => (
+                    <LogEntry key={i} log={log} />
+                  ))}
+                  <div ref={logsEndRef} />
+                </div>
+              )}
             </div>
           )}
 
@@ -217,7 +343,7 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
               <h3 className="text-sm font-medium mb-1">Details</h3>
               <dl className="text-sm space-y-1">
                 {Object.entries(card.metadata).map(([key, value]) => {
-                  if (key === "url") return null;
+                  if (["url", "repo_id", "worktree_path", "branch_name", "session_id", "execution_status"].includes(key)) return null;
                   return (
                     <div key={key} className="flex gap-2">
                       <dt className="text-muted-foreground capitalize">{key.replace(/_/g, " ")}:</dt>
@@ -246,6 +372,17 @@ export function CardDetailPanel({ card, onClose, processingLogs, onProcess, onEx
   );
 }
 
+function TodoStatusIcon({ status }: { status: string }) {
+  switch (status) {
+    case "completed":
+      return <CheckCircle className="h-3.5 w-3.5 text-green-600 shrink-0" />;
+    case "in_progress":
+      return <CircleDot className="h-3.5 w-3.5 text-amber-500 shrink-0" />;
+    default:
+      return <Circle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
+  }
+}
+
 function LogEntry({ log }: { log: ProcessingLog }) {
   switch (log.step) {
     case "start":
@@ -263,6 +400,22 @@ function LogEntry({ log }: { log: ProcessingLog }) {
           {log.message}
         </div>
       );
+    case "question":
+      return (
+        <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
+          <MessageCircleQuestion className="h-3 w-3 mt-0.5 shrink-0" />
+          <span className="font-medium">Q: {log.message}</span>
+        </div>
+      );
+    case "answer":
+      return (
+        <div className="flex items-start gap-2 text-blue-600 dark:text-blue-400">
+          <Send className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>A: {log.message}</span>
+        </div>
+      );
+    case "todo":
+      return null;
     case "done":
     case "executed":
       return (
@@ -286,4 +439,23 @@ function LogEntry({ log }: { log: ProcessingLog }) {
         </div>
       );
   }
+}
+
+interface ChecklistItem {
+  text: string;
+  checked: boolean;
+}
+
+function parsePlanChecklist(body: string | null): ChecklistItem[] {
+  if (!body) return [];
+  const items: ChecklistItem[] = [];
+  const regex = /^[-*]\s+\[([ xX])\]\s+(.+)$/gm;
+  let match;
+  while ((match = regex.exec(body)) !== null) {
+    items.push({
+      checked: match[1] !== " ",
+      text: match[2].trim(),
+    });
+  }
+  return items;
 }

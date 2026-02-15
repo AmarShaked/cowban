@@ -28,7 +28,7 @@ export function Board() {
     useBoard();
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
-  const { processingCardId, logs, startProcessing, startExecution } = useAiProcessing();
+  const { processingCardId, logs, todos, activeQuestion, startProcessing, startExecution, answerQuestion, loadHistoricalLogs } = useAiProcessing();
   const { theme, setTheme } = useTheme();
   const [repos, setRepos] = useState<{ id: string; name: string; path: string }[]>([]);
   const [defaultRepoId, setDefaultRepoId] = useState<string | null>(null);
@@ -77,6 +77,12 @@ export function Board() {
   const currentSelectedCard = selectedCard
     ? cards.find((c) => c.id === selectedCard.id) ?? null
     : null;
+
+  useEffect(() => {
+    if (currentSelectedCard && processingCardId !== currentSelectedCard.id) {
+      loadHistoricalLogs(currentSelectedCard.id);
+    }
+  }, [currentSelectedCard?.id, processingCardId, loadHistoricalLogs]);
 
   if (loading) {
     return (
@@ -162,9 +168,13 @@ export function Board() {
           <CardDetailPanel
             card={currentSelectedCard}
             onClose={() => setSelectedCard(null)}
-            processingLogs={processingCardId === currentSelectedCard.id ? logs : undefined}
+            processingLogs={processingCardId === currentSelectedCard.id ? logs : logs}
+            todos={processingCardId === currentSelectedCard.id ? todos : todos}
+            activeQuestion={processingCardId === currentSelectedCard.id ? activeQuestion : activeQuestion}
+            isLiveProcessing={processingCardId === currentSelectedCard.id}
             onProcess={(customRequest) => startProcessing(currentSelectedCard.id, updateCard, customRequest)}
             onExecuteCode={() => startExecution(currentSelectedCard.id, updateCard)}
+            onAnswerQuestion={(answer) => answerQuestion(currentSelectedCard.id, answer, updateCard)}
             repos={repos}
             defaultRepoId={defaultRepoId}
             onRepoChange={(repoId) => handleRepoChange(currentSelectedCard.id, repoId)}
