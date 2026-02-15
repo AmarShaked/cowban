@@ -10,6 +10,25 @@ import type { SettingsRepo } from "../db/settings-repo.js";
 import type { LogRepo } from "../db/log-repo.js";
 import type { TodoItem, QuestionEvent } from "@daily-kanban/shared";
 
+function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
+  switch (toolName) {
+    case "Bash":
+      return `Bash: ${(input.command as string) || ""}`;
+    case "Read":
+      return `Read: ${(input.file_path as string) || ""}`;
+    case "Write":
+      return `Write: ${(input.file_path as string) || ""}`;
+    case "Edit":
+      return `Edit: ${(input.file_path as string) || ""}`;
+    case "Glob":
+      return `Glob: ${(input.pattern as string) || ""}`;
+    case "Grep":
+      return `Grep: ${(input.pattern as string) || ""} ${(input.path as string) || ""}`.trim();
+    default:
+      return `${toolName}(${Object.keys(input).join(", ")})`;
+  }
+}
+
 const AVAILABLE_ACTIONS: Record<string, string[]> = {
   gmail: ["reply", "archive", "delete", "label"],
   calendar: ["summarize"],
@@ -292,7 +311,13 @@ export function createAiRouter(
               textBuffer = "";
             }
           },
-          onToolStart: (_toolName) => {},
+          onToolStart: (toolName) => {
+            if (textBuffer) {
+              persistAndSend("ai_output", textBuffer, currentSessionId, null);
+              textBuffer = "";
+            }
+            persistAndSend("tool_start", `Using: ${toolName}`, currentSessionId, { toolName });
+          },
           onToolComplete: (toolName, input) => {
             if (toolName === "TaskCreate" || toolName === "TaskUpdate") {
               const todoData: Record<string, unknown> = {
@@ -319,7 +344,16 @@ export function createAiRouter(
               cardRepo.setMetadataField(cardId, "execution_status", "paused_question");
               paused = true;
               child.kill("SIGTERM");
+            } else {
+              // Log the tool call with its input for visibility
+              const summary = summarizeToolInput(toolName, input);
+              persistAndSend("tool_complete", summary, currentSessionId, { toolName, input });
             }
+          },
+          onToolResult: (_toolUseId, content) => {
+            // Truncate very long results for display
+            const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
+            persistAndSend("tool_result", truncated, currentSessionId, null);
           },
           onResult: (_status, sessionId) => {
             if (sessionId) {
@@ -451,7 +485,13 @@ export function createAiRouter(
               textBuffer = "";
             }
           },
-          onToolStart: () => {},
+          onToolStart: (toolName) => {
+            if (textBuffer) {
+              persistAndSend("ai_output", textBuffer, currentSessionId, null);
+              textBuffer = "";
+            }
+            persistAndSend("tool_start", `Using: ${toolName}`, currentSessionId, { toolName });
+          },
           onToolComplete: (toolName, input) => {
             if (toolName === "TaskCreate" || toolName === "TaskUpdate") {
               const todoData: Record<string, unknown> = {
@@ -478,7 +518,14 @@ export function createAiRouter(
               cardRepo.setMetadataField(cardId, "execution_status", "paused_question");
               paused = true;
               child.kill("SIGTERM");
+            } else {
+              const summary = summarizeToolInput(toolName, input);
+              persistAndSend("tool_complete", summary, currentSessionId, { toolName, input });
             }
+          },
+          onToolResult: (_toolUseId, content) => {
+            const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
+            persistAndSend("tool_result", truncated, currentSessionId, null);
           },
           onResult: (_status, sid) => {
             if (sid) {

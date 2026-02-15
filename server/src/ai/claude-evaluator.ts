@@ -45,8 +45,9 @@ function validateEvaluation(obj: Record<string, unknown>): AiEvaluation {
 
 export interface ExecutionCallbacks {
   onText: (text: string) => void;
-  onToolStart: (toolName: string) => void;
+  onToolStart: (toolName: string, toolId: string) => void;
   onToolComplete: (toolName: string, input: Record<string, unknown>) => void;
+  onToolResult: (toolUseId: string, content: string) => void;
   onInit: (sessionId: string) => void;
   onResult: (status: string, sessionId?: string) => void;
 }
@@ -54,7 +55,7 @@ export interface ExecutionCallbacks {
 export class ClaudeEvaluator {
   private timeoutMs: number;
 
-  constructor(timeoutMs: number = 30000) {
+  constructor(timeoutMs: number = 120000) {
     this.timeoutMs = timeoutMs;
   }
 
@@ -120,13 +121,13 @@ export class ClaudeEvaluator {
         console.error("Claude CLI stderr:", data.toString());
       });
 
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         if (code !== 0) {
-          console.error(`Claude CLI exited with code ${code}`);
+          console.error(`Claude CLI exited with code ${code}, signal ${signal}`);
           resolve({
             canAutomate: false,
             confidence: 0,
-            proposedAction: "AI evaluation failed",
+            proposedAction: signal === "SIGTERM" ? "AI evaluation timed out" : "AI evaluation failed",
             actionPayload: null,
           });
           return;
@@ -183,10 +184,11 @@ Repository: ${repoName} (${repoPath})`;
       const child = spawn("claude", ["-p", prompt], {
         cwd: worktreePath,
         stdio: ["ignore", "pipe", "pipe"],
-        timeout: 60000,
+        timeout: 300000,
       });
 
       let stdout = "";
+      let stderr = "";
 
       child.stdout.on("data", (data: Buffer) => {
         const chunk = data.toString();
@@ -195,13 +197,20 @@ Repository: ${repoName} (${repoPath})`;
       });
 
       child.stderr.on("data", (data: Buffer) => {
-        console.error("Claude plan stderr:", data.toString());
+        const chunk = data.toString();
+        stderr += chunk;
+        console.error("Claude plan stderr:", chunk);
       });
 
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         if (code !== 0) {
-          console.error(`Claude plan exited with code ${code}`);
-          resolve("Plan generation failed.");
+          console.error(`Claude plan exited with code ${code}, signal ${signal}`);
+          if (stderr) console.error("Claude plan stderr output:", stderr);
+          if (signal === "SIGTERM") {
+            resolve(stdout.trim() || "Plan generation timed out.");
+          } else {
+            resolve(stdout.trim() || `Plan generation failed (exit ${code}). ${stderr}`);
+          }
           return;
         }
 
@@ -282,10 +291,13 @@ If you can confidently handle this with one of the available actions, set canAut
           callbacks.onText(event.text);
           break;
         case "tool_use_start":
-          callbacks.onToolStart(event.toolName);
+          callbacks.onToolStart(event.toolName, event.toolId);
           break;
         case "tool_use_complete":
           callbacks.onToolComplete(event.toolName, event.input);
+          break;
+        case "tool_result":
+          callbacks.onToolResult(event.toolUseId, event.content);
           break;
         case "result":
           callbacks.onResult(event.status, event.sessionId);

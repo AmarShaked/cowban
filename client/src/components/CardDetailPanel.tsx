@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   X, Mail, Calendar, GitMerge, Send, ListTodo, PenLine, ExternalLink,
   Loader2, CheckCircle2, AlertTriangle, Sparkles, ChevronDown, ChevronRight,
-  MessageCircleQuestion, CircleDot, Circle, CheckCircle,
+  MessageCircleQuestion, CircleDot, Circle, CheckCircle, Wrench, Terminal,
 } from "lucide-react";
 
 const sourceIcons: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -397,6 +397,26 @@ function LogEntry({ log }: { log: ProcessingLog }) {
     case "ai_output":
       return (
         <div className="pl-5 font-mono text-muted-foreground whitespace-pre-wrap break-all">
+          {log.message}
+        </div>
+      );
+    case "tool_start":
+      return (
+        <div className="flex items-start gap-2 text-purple-600 dark:text-purple-400">
+          <Wrench className="h-3 w-3 mt-0.5 shrink-0" />
+          <span className="font-medium">{log.message}</span>
+        </div>
+      );
+    case "tool_complete":
+      return (
+        <div className="flex items-start gap-2 text-purple-600 dark:text-purple-400">
+          <Terminal className="h-3 w-3 mt-0.5 shrink-0" />
+          <span className="font-mono text-xs">{log.message}</span>
+        </div>
+      );
+    case "tool_result":
+      return (
+        <div className="pl-5 font-mono text-xs text-muted-foreground whitespace-pre-wrap break-all bg-muted/50 rounded p-1.5 max-h-48 overflow-y-auto">
           {log.message}
         </div>
       );
