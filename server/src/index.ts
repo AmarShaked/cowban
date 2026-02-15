@@ -65,7 +65,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/board", createBoardRouter(boardRepo, cardRepo));
 app.use("/api/cards", createCardsRouter(cardRepo, boardRepo));
-app.use("/api/ai", createAiRouter(cardRepo, evaluator, registry, db));
+app.use("/api/ai", createAiRouter(cardRepo, evaluator, registry, db, settingsRepo));
 app.use("/api/settings", createSettingsRouter(settingsRepo));
 app.use("/api/repos", createReposRouter(settingsRepo));
 // --- Scheduler ---

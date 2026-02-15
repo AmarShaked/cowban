@@ -99,6 +99,12 @@ export class CardRepo {
       .run(result, id);
   }
 
+  setBody(id: number, body: string): void {
+    this.db
+      .prepare("UPDATE cards SET body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(body, id);
+  }
+
   setMetadataField(id: number, key: string, value: unknown): void {
     const card = this.getById(id);
     if (!card) return;
