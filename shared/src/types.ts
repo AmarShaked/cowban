@@ -74,3 +74,27 @@ export interface MoveCardRequest {
 export interface ToggleAiRequest {
   ai_toggle: boolean;
 }
+
+export interface ExecutionLog {
+  id: number;
+  card_id: number;
+  session_id: string | null;
+  step: string;  // start, ai_output, question, answer, todo, done, error, executing, executed
+  message: string;
+  data: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface TodoItem {
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface QuestionEvent {
+  questionId: number;  // execution_log id
+  question: string;
+  header?: string;
+  options?: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
