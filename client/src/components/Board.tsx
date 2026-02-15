@@ -3,6 +3,9 @@ import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
 import { KanbanColumn } from "./KanbanColumn";
 import { CreateCardDialog } from "./CreateCardDialog";
 import { useBoard } from "../hooks/useBoard";
+import { Link } from "react-router-dom";
+import { Settings as SettingsIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const COLUMNS: ColumnName[] = ["inbox", "review", "ai_do", "human_do", "done"];
 
@@ -42,6 +45,11 @@ export function Board() {
         </div>
         <div className="flex gap-2">
           <CreateCardDialog onCreateCard={createCard} />
+          <Link to="/settings">
+            <Button variant="ghost" size="icon">
+              <SettingsIcon className="h-4 w-4" />
+            </Button>
+          </Link>
         </div>
       </header>
       <div className="flex-1 overflow-x-auto p-4">
