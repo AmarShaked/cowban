@@ -5,6 +5,8 @@ import { BoardRepo } from "./db/board-repo.js";
 import { CardRepo } from "./db/card-repo.js";
 import { createBoardRouter } from "./routes/board.js";
 import { createCardsRouter } from "./routes/cards.js";
+import { ClaudeEvaluator } from "./ai/claude-evaluator.js";
+import { createAiRouter } from "./routes/ai.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,6 +24,9 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/board", createBoardRouter(boardRepo, cardRepo));
 app.use("/api/cards", createCardsRouter(cardRepo, boardRepo));
+
+const evaluator = new ClaudeEvaluator();
+app.use("/api/ai", createAiRouter(cardRepo, evaluator));
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

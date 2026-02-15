@@ -32,4 +32,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ ai_toggle }),
     }),
+
+  evaluateCard: (cardId: number) =>
+    fetchJson<Card>(`/ai/evaluate/${cardId}`, { method: "POST" }),
 };

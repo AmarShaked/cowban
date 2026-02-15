@@ -34,6 +34,16 @@ export function useBoard() {
   const toggleAi = useCallback(async (cardId: number, value: boolean) => {
     const updated = await api.toggleAi(cardId, value);
     setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+
+    if (value) {
+      try {
+        const evaluated = await api.evaluateCard(cardId);
+        setCards((prev) => prev.map((c) => (c.id === evaluated.id ? evaluated : c)));
+      } catch {
+        const refreshed = await api.toggleAi(cardId, false);
+        setCards((prev) => prev.map((c) => (c.id === refreshed.id ? refreshed : c)));
+      }
+    }
   }, []);
 
   const createCard = useCallback(async (title: string, body?: string) => {
