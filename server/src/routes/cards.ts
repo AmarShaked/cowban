@@ -44,5 +44,13 @@ export function createCardsRouter(
     res.json(card);
   });
 
+  router.patch("/:id/repo", (req, res) => {
+    const id = Number(req.params.id);
+    const { repo_id } = req.body;
+    cardRepo.setMetadataField(id, "repo_id", repo_id);
+    const card = cardRepo.getById(id);
+    res.json(card);
+  });
+
   return router;
 }

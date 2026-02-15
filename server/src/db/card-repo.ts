@@ -98,4 +98,21 @@ export class CardRepo {
       .prepare("UPDATE cards SET execution_result = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(result, id);
   }
+
+  setMetadataField(id: number, key: string, value: unknown): void {
+    const card = this.getById(id);
+    if (!card) return;
+    const metadata = card.metadata || {};
+    metadata[key] = value;
+    this.db
+      .prepare("UPDATE cards SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(JSON.stringify(metadata), id);
+  }
+
+  deleteAllByBoard(boardId: number): number {
+    const result = this.db
+      .prepare("DELETE FROM cards WHERE board_id = ?")
+      .run(boardId);
+    return result.changes;
+  }
 }
