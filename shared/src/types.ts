@@ -1,6 +1,6 @@
 // shared/src/types.ts
 
-export type ColumnName = "inbox" | "review" | "ai_do" | "human_do" | "done";
+export type ColumnName = "inbox" | "in_process" | "review" | "ai_do" | "human_do" | "done";
 
 export type SourceType = "gmail" | "calendar" | "linear" | "gitlab" | "telegram" | "manual";
 

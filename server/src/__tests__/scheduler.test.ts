@@ -43,13 +43,68 @@ describe("Scheduler", () => {
 
     registry.register("mock", mockConnector);
 
-    const scheduler = new Scheduler(registry, boardRepo, cardRepo);
+    // Enable the mock connector in DB
+    db.prepare("INSERT INTO connector_configs (type, credentials, enabled) VALUES (?, ?, ?)").run("mock", '{}', 1);
+
+    const scheduler = new Scheduler(registry, boardRepo, cardRepo, db);
     await scheduler.pollAll();
 
     const board = boardRepo.getOrCreateToday();
     const cards = cardRepo.listByBoard(board.id);
     expect(cards).toHaveLength(2);
     expect(cards[0].title).toBe("Item 1");
+  });
+
+  it("skips disabled connectors", async () => {
+    const mockConnector: Connector = {
+      name: "mock",
+      icon: "mock",
+      async fetchItems() {
+        return [
+          { source_id: "mock:1", source_type: "gmail", title: "Item 1", body: null, metadata: {} },
+        ];
+      },
+      async executeAction() {
+        return { success: true, message: "ok" };
+      },
+    };
+
+    registry.register("mock", mockConnector);
+
+    // Connector is disabled in DB
+    db.prepare("INSERT INTO connector_configs (type, credentials, enabled) VALUES (?, ?, ?)").run("mock", '{}', 0);
+
+    const scheduler = new Scheduler(registry, boardRepo, cardRepo, db);
+    await scheduler.pollAll();
+
+    const board = boardRepo.getOrCreateToday();
+    const cards = cardRepo.listByBoard(board.id);
+    expect(cards).toHaveLength(0);
+  });
+
+  it("skips connectors with no config row", async () => {
+    const mockConnector: Connector = {
+      name: "mock",
+      icon: "mock",
+      async fetchItems() {
+        return [
+          { source_id: "mock:1", source_type: "gmail", title: "Item 1", body: null, metadata: {} },
+        ];
+      },
+      async executeAction() {
+        return { success: true, message: "ok" };
+      },
+    };
+
+    registry.register("mock", mockConnector);
+
+    // No DB row for "mock" - should be treated as disabled
+    const scheduler = new Scheduler(registry, boardRepo, cardRepo, db);
+    await scheduler.pollAll();
+
+    const board = boardRepo.getOrCreateToday();
+    const cards = cardRepo.listByBoard(board.id);
+    expect(cards).toHaveLength(0);
   });
 
   it("skips duplicate items on second poll", async () => {
@@ -68,7 +123,10 @@ describe("Scheduler", () => {
 
     registry.register("mock", mockConnector);
 
-    const scheduler = new Scheduler(registry, boardRepo, cardRepo);
+    // Enable the mock connector in DB
+    db.prepare("INSERT INTO connector_configs (type, credentials, enabled) VALUES (?, ?, ?)").run("mock", '{}', 1);
+
+    const scheduler = new Scheduler(registry, boardRepo, cardRepo, db);
     await scheduler.pollAll();
     await scheduler.pollAll();
 

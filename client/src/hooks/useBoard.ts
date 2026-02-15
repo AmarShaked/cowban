@@ -24,6 +24,8 @@ export function useBoard() {
 
   useEffect(() => {
     refresh();
+    const interval = setInterval(refresh, 30_000);
+    return () => clearInterval(interval);
   }, [refresh]);
 
   const moveCard = useCallback(async (cardId: number, column: ColumnName) => {
@@ -40,24 +42,18 @@ export function useBoard() {
     }
   }, [refresh]);
 
-  const toggleAi = useCallback(async (cardId: number, value: boolean) => {
-    const updated = await api.toggleAi(cardId, value);
-    setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-
-    if (value) {
-      try {
-        const evaluated = await api.evaluateCard(cardId);
-        setCards((prev) => prev.map((c) => (c.id === evaluated.id ? evaluated : c)));
-      } catch {
-        const refreshed = await api.toggleAi(cardId, false);
-        setCards((prev) => prev.map((c) => (c.id === refreshed.id ? refreshed : c)));
-      }
-    }
-  }, []);
-
   const createCard = useCallback(async (title: string, body?: string) => {
     const card = await api.createCard(title, body);
     setCards((prev) => [...prev, card]);
+  }, []);
+
+  const purgeBoard = useCallback(async () => {
+    await api.purgeBoard();
+    setCards([]);
+  }, []);
+
+  const updateCard = useCallback((card: Card) => {
+    setCards((prev) => prev.map((c) => (c.id === card.id ? card : c)));
   }, []);
 
   const cardsByColumn = (column: ColumnName) =>
@@ -70,8 +66,9 @@ export function useBoard() {
     error,
     refresh,
     moveCard,
-    toggleAi,
     createCard,
+    purgeBoard,
     cardsByColumn,
+    updateCard,
   };
 }

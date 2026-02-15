@@ -16,9 +16,27 @@ export class LinearConnector implements Connector {
   icon = "linear";
 
   private client: LinearClient | null = null;
+  private projectId: string | null = null;
+  private teamId: string | null = null;
 
   setApiKey(key: string): void {
     this.client = new LinearClient({ apiKey: key });
+  }
+
+  setProjectId(projectId: string | null): void {
+    this.projectId = projectId || null;
+  }
+
+  setTeamId(teamId: string | null): void {
+    this.teamId = teamId || null;
+  }
+
+  async getTeams(): Promise<{ id: string; name: string; key: string }[]> {
+    if (!this.client) {
+      throw new Error("Linear client not configured. Call setApiKey() first.");
+    }
+    const teams = await this.client.teams();
+    return teams.nodes.map((t) => ({ id: t.id, name: t.name, key: t.key }));
   }
 
   transformIssues(issues: LinearIssueData[]): KanbanItem[] {
@@ -40,11 +58,16 @@ export class LinearConnector implements Connector {
     }
 
     const me = await this.client.viewer;
-    const issues = await me.assignedIssues({
-      filter: {
-        state: { name: { eq: "Todo" } },
-      },
-    });
+    const filter: Record<string, unknown> = {
+      state: { name: { eq: "Todo" } },
+    };
+    if (this.projectId) {
+      filter.project = { id: { eq: this.projectId } };
+    }
+    if (this.teamId) {
+      filter.team = { id: { eq: this.teamId } };
+    }
+    const issues = await me.assignedIssues({ filter });
 
     const issueData: LinearIssueData[] = issues.nodes.map((issue) => ({
       id: issue.id,

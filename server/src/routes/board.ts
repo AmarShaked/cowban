@@ -14,5 +14,11 @@ export function createBoardRouter(
     res.json({ board, cards });
   });
 
+  router.delete("/today", (_req, res) => {
+    const board = boardRepo.getOrCreateToday();
+    const deleted = cardRepo.deleteAllByBoard(board.id);
+    res.json({ success: true, deleted });
+  });
+
   return router;
 }

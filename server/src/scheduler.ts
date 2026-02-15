@@ -1,4 +1,5 @@
 // server/src/scheduler.ts
+import type Database from "better-sqlite3";
 import type { ConnectorRegistry } from "./connectors/registry.js";
 import type { BoardRepo } from "./db/board-repo.js";
 import type { CardRepo } from "./db/card-repo.js";
@@ -9,14 +10,28 @@ export class Scheduler {
   constructor(
     private registry: ConnectorRegistry,
     private boardRepo: BoardRepo,
-    private cardRepo: CardRepo
+    private cardRepo: CardRepo,
+    private db: Database.Database,
   ) {}
+
+  private isConnectorEnabled(type: string): boolean {
+    const config = this.db.prepare(
+      "SELECT enabled FROM connector_configs WHERE type = ?"
+    ).get(type) as { enabled: number } | undefined;
+
+    // If no config row exists, treat as disabled
+    return config ? Boolean(config.enabled) : false;
+  }
 
   async pollAll(): Promise<void> {
     const board = this.boardRepo.getOrCreateToday();
     const connectors = this.registry.getAllEntries();
 
     for (const [name, connector] of connectors) {
+      if (!this.isConnectorEnabled(name)) {
+        continue;
+      }
+
       try {
         const items = await connector.fetchItems();
         for (const item of items) {

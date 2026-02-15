@@ -87,6 +87,13 @@ export class GmailConnector implements Connector {
         });
         return { success: true, message: "Email archived" };
       }
+      case "delete": {
+        await gmail.users.messages.trash({
+          userId: "me",
+          id: messageId,
+        });
+        return { success: true, message: "Email moved to trash" };
+      }
       default:
         return { success: false, message: `Unknown action: ${action.type}` };
     }
