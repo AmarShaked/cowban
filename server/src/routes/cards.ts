@@ -30,8 +30,8 @@ export function createCardsRouter(
 
   router.patch("/:id/move", (req, res) => {
     const id = Number(req.params.id);
-    const { column_name } = req.body as MoveCardRequest;
-    cardRepo.moveToColumn(id, column_name);
+    const { column_name, position } = req.body as MoveCardRequest;
+    cardRepo.moveToColumn(id, column_name, position);
     const card = cardRepo.getById(id);
     res.json(card);
   });

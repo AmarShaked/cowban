@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import type { Card, TodoItem, QuestionEvent, ExecutionLog } from "@daily-kanban/shared";
+import type { Card, TodoItem, QuestionEvent } from "@daily-kanban/shared";
 import { api } from "../lib/api";
 
 export interface ProcessingLog {

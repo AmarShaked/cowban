@@ -53,9 +53,29 @@ export function Board() {
 
   const onDragEnd = (result: DropResult) => {
     if (!result.destination) return;
+    const { source, destination } = result;
+    if (source.droppableId === destination.droppableId && source.index === destination.index) return;
+
     const cardId = Number(result.draggableId);
-    const newColumn = result.destination.droppableId as ColumnName;
-    moveCard(cardId, newColumn);
+    const newColumn = destination.droppableId as ColumnName;
+
+    // Get the destination column's cards (excluding the dragged card)
+    const destCards = cardsByColumn(newColumn).filter((c) => c.id !== cardId);
+    const destIndex = destination.index;
+
+    // Calculate position using fractional indexing
+    let position: number;
+    if (destCards.length === 0) {
+      position = 1;
+    } else if (destIndex === 0) {
+      position = destCards[0].position - 1;
+    } else if (destIndex >= destCards.length) {
+      position = destCards[destCards.length - 1].position + 1;
+    } else {
+      position = (destCards[destIndex - 1].position + destCards[destIndex].position) / 2;
+    }
+
+    moveCard(cardId, newColumn, position);
 
     if (newColumn === "in_process") {
       const card = cards.find((c) => c.id === cardId);

@@ -21,10 +21,10 @@ export const api = {
       body: JSON.stringify({ title, body }),
     }),
 
-  moveCard: (id: number, column_name: ColumnName) =>
+  moveCard: (id: number, column_name: ColumnName, position: number) =>
     fetchJson<Card>(`/cards/${id}/move`, {
       method: "PATCH",
-      body: JSON.stringify({ column_name }),
+      body: JSON.stringify({ column_name, position }),
     }),
 
   toggleAi: (id: number, ai_toggle: boolean) =>
