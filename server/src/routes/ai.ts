@@ -8,7 +8,7 @@ import type { ConnectorRegistry } from "../connectors/registry.js";
 import { WorktreeManager } from "../git/worktree-manager.js";
 import type { SettingsRepo } from "../db/settings-repo.js";
 import type { LogRepo } from "../db/log-repo.js";
-import type { TodoItem, QuestionEvent } from "@daily-kanban/shared";
+import type { SessionRepo } from "../db/session-repo.js";
 
 function summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
@@ -58,6 +58,7 @@ export function createAiRouter(
   db: Database.Database,
   settingsRepo: SettingsRepo,
   logRepo: LogRepo,
+  sessionRepo: SessionRepo,
   confidenceThreshold: number = 80
 ): Router {
   const worktreeManager = new WorktreeManager();
@@ -67,6 +68,42 @@ export function createAiRouter(
     const cardId = Number(req.params.cardId);
     const logs = logRepo.listByCard(cardId);
     res.json({ logs });
+  });
+
+  router.get("/sessions/:cardId", (req, res) => {
+    const cardId = Number(req.params.cardId);
+    const sessions = sessionRepo.listByCard(cardId);
+    res.json({ sessions });
+  });
+
+  router.get("/session-logs/:sessionId", (req, res) => {
+    const sessionId = Number(req.params.sessionId);
+    const logs = logRepo.listBySession(sessionId);
+    res.json({ logs });
+  });
+
+  router.get("/diff/:cardId", async (req, res) => {
+    const cardId = Number(req.params.cardId);
+    const card = cardRepo.getById(cardId);
+
+    if (!card) {
+      res.status(404).json({ error: "Card not found" });
+      return;
+    }
+
+    const worktreePath = card.metadata?.worktree_path as string | undefined;
+    if (!worktreePath) {
+      res.json({ files: [], stats: { totalFiles: 0, totalAdditions: 0, totalDeletions: 0 } });
+      return;
+    }
+
+    try {
+      const diff = await worktreeManager.getDiff(worktreePath);
+      res.json(diff);
+    } catch (err) {
+      console.error("getDiff error:", err);
+      res.json({ files: [], stats: { totalFiles: 0, totalAdditions: 0, totalDeletions: 0 } });
+    }
   });
 
   router.post("/evaluate/:cardId", async (req, res) => {
@@ -122,6 +159,13 @@ export function createAiRouter(
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Create execution session
+    const execSession = sessionRepo.create(
+      cardId,
+      "planning",
+      customRequest || "AI evaluation",
+    );
+
     try {
       send({ step: "start", message: customRequest ? `Starting AI evaluation: "${customRequest}"` : "Starting AI evaluation..." });
 
@@ -137,6 +181,7 @@ export function createAiRouter(
         if (!repo) {
           send({ step: "error", message: "Assigned repo not found" });
           send({ step: "done", message: "Processing failed", card: cardRepo.getById(cardId) });
+          sessionRepo.updateStatus(execSession.id, "failed", "Repo not found");
           res.end();
           return;
         }
@@ -167,6 +212,7 @@ export function createAiRouter(
 
         const updated = cardRepo.getById(cardId);
         send({ step: "done", message: "Plan ready for review", card: updated });
+        sessionRepo.updateStatus(execSession.id, "completed", "Plan generated");
         res.end();
         return;
       }
@@ -231,10 +277,12 @@ export function createAiRouter(
 
       const updated = cardRepo.getById(cardId);
       send({ step: "done", message: "Processing complete", card: updated });
+      sessionRepo.updateStatus(execSession.id, "completed", "Processing complete");
     } catch (err) {
       console.error("AI process-stream error:", err);
       send({ step: "error", message: "AI processing failed" });
       send({ step: "done", message: "Processing failed", card: cardRepo.getById(cardId) });
+      sessionRepo.updateStatus(execSession.id, "failed", (err as Error).message);
     }
 
     res.end();
@@ -275,12 +323,12 @@ export function createAiRouter(
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Clear any previous logs for this card before new execution
-    logRepo.deleteByCard(cardId);
+    // Create execution session instead of deleting old logs
+    const execSession = sessionRepo.create(cardId, "execution", `Code execution in ${repo.name}`);
     cardRepo.setMetadataField(cardId, "execution_status", "running");
 
     const persistAndSend = (step: string, message: string, sessionId: string | null, data: Record<string, unknown> | null, extra?: Record<string, unknown>) => {
-      logRepo.insert(cardId, step, message, sessionId, data);
+      logRepo.insert(cardId, step, message, sessionId, data, execSession.id);
       send({ step, message, ...extra, ...(data ? { data } : {}) });
     };
 
@@ -339,9 +387,10 @@ export function createAiRouter(
                 options: firstQ.options || [],
                 multiSelect: firstQ.multiSelect || false,
               };
-              const logEntry = logRepo.insert(cardId, "question", questionData.question as string, currentSessionId, questionData);
+              const logEntry = logRepo.insert(cardId, "question", questionData.question as string, currentSessionId, questionData, execSession.id);
               send({ step: "question", message: questionData.question as string, data: { ...questionData, questionId: logEntry.id } });
               cardRepo.setMetadataField(cardId, "execution_status", "paused_question");
+              sessionRepo.updateStatus(execSession.id, "paused", "Waiting for user input");
               paused = true;
               child.kill("SIGTERM");
             } else {
@@ -401,12 +450,14 @@ export function createAiRouter(
       cardRepo.setExecutionResult(cardId, prUrl ? `PR: ${prUrl}` : "Code changes committed");
       cardRepo.moveToColumn(cardId, "done");
       cardRepo.setMetadataField(cardId, "execution_status", "completed");
+      sessionRepo.updateStatus(execSession.id, "completed", prUrl ? `PR: ${prUrl}` : "Code changes committed");
 
       const updated = cardRepo.getById(cardId);
       persistAndSend("done", prUrl ? `Done! PR: ${prUrl}` : "Done!", currentSessionId, null, { card: updated });
     } catch (err) {
       console.error("Execute-code error:", err);
       cardRepo.setMetadataField(cardId, "execution_status", "failed");
+      sessionRepo.updateStatus(execSession.id, "failed", (err as Error).message);
       persistAndSend("error", "Code execution failed", null, null);
       persistAndSend("done", "Execution failed", null, null, { card: cardRepo.getById(cardId) });
     }
@@ -444,7 +495,10 @@ export function createAiRouter(
       return;
     }
 
-    logRepo.insert(cardId, "answer", answer, sessionId, null);
+    // Create a new session for the answer/resume
+    const execSession = sessionRepo.create(cardId, "answer", `Resume: "${answer.slice(0, 100)}"`);
+
+    logRepo.insert(cardId, "answer", answer, sessionId, null, execSession.id);
 
     // SSE setup — resuming execution
     res.setHeader("Content-Type", "text/event-stream");
@@ -459,7 +513,7 @@ export function createAiRouter(
     cardRepo.setMetadataField(cardId, "execution_status", "running");
 
     const persistAndSend = (step: string, message: string, sid: string | null, data: Record<string, unknown> | null, extra?: Record<string, unknown>) => {
-      logRepo.insert(cardId, step, message, sid, data);
+      logRepo.insert(cardId, step, message, sid, data, execSession.id);
       send({ step, message, ...extra, ...(data ? { data } : {}) });
     };
 
@@ -513,9 +567,10 @@ export function createAiRouter(
                 options: firstQ.options || [],
                 multiSelect: firstQ.multiSelect || false,
               };
-              const logEntry = logRepo.insert(cardId, "question", questionData.question as string, currentSessionId, questionData);
+              const logEntry = logRepo.insert(cardId, "question", questionData.question as string, currentSessionId, questionData, execSession.id);
               send({ step: "question", message: questionData.question as string, data: { ...questionData, questionId: logEntry.id } });
               cardRepo.setMetadataField(cardId, "execution_status", "paused_question");
+              sessionRepo.updateStatus(execSession.id, "paused", "Waiting for user input");
               paused = true;
               child.kill("SIGTERM");
             } else {
@@ -571,12 +626,14 @@ export function createAiRouter(
       cardRepo.setExecutionResult(cardId, prUrl ? `PR: ${prUrl}` : "Code changes committed");
       cardRepo.moveToColumn(cardId, "done");
       cardRepo.setMetadataField(cardId, "execution_status", "completed");
+      sessionRepo.updateStatus(execSession.id, "completed", prUrl ? `PR: ${prUrl}` : "Code changes committed");
 
       const updated = cardRepo.getById(cardId);
       persistAndSend("done", prUrl ? `Done! PR: ${prUrl}` : "Done!", currentSessionId, null, { card: updated });
     } catch (err) {
       console.error("Answer/resume error:", err);
       cardRepo.setMetadataField(cardId, "execution_status", "failed");
+      sessionRepo.updateStatus(execSession.id, "failed", (err as Error).message);
       persistAndSend("error", "Execution failed after resume", null, null);
       persistAndSend("done", "Execution failed", null, null, { card: cardRepo.getById(cardId) });
     }

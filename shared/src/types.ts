@@ -100,3 +100,30 @@ export interface QuestionEvent {
   options?: { label: string; description?: string }[];
   multiSelect?: boolean;
 }
+
+export interface ExecutionSession {
+  id: number;
+  card_id: number;
+  type: string;  // execution, planning, answer
+  status: string;  // running, completed, failed, paused
+  started_at: string;
+  finished_at: string | null;
+  summary: string | null;
+}
+
+export interface FileDiff {
+  path: string;
+  status: string;  // added, modified, deleted, renamed
+  additions: number;
+  deletions: number;
+  diff: string;
+}
+
+export interface DiffResult {
+  files: FileDiff[];
+  stats: {
+    totalFiles: number;
+    totalAdditions: number;
+    totalDeletions: number;
+  };
+}

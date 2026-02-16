@@ -1,12 +1,16 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import type { Card, TodoItem, QuestionEvent } from "@daily-kanban/shared";
+import type { ProcessingLog, QueuedAction } from "../hooks/useAiProcessing";
 import Markdown from "react-markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LogsPanel } from "./LogsPanel";
+import { DiffViewer } from "./DiffViewer";
+import { QueuedActions } from "./QueuedActions";
 import {
   X, Mail, Calendar, GitMerge, Send, ListTodo, PenLine, ExternalLink,
-  Loader2, CheckCircle2, AlertTriangle, Sparkles, ChevronDown, ChevronRight,
-  MessageCircleQuestion, CircleDot, Circle, CheckCircle, Wrench, Terminal,
+  Sparkles, ChevronDown, ChevronRight,
+  MessageCircleQuestion, CircleDot, Circle, CheckCircle,
 } from "lucide-react";
 
 const sourceIcons: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -27,11 +31,7 @@ const sourceLabels: Record<string, string> = {
   manual: "Manual",
 };
 
-export interface ProcessingLog {
-  step: string;
-  message: string;
-  data?: Record<string, unknown>;
-}
+export { type ProcessingLog };
 
 interface CardDetailPanelProps {
   card: Card;
@@ -46,11 +46,15 @@ interface CardDetailPanelProps {
   repos?: { id: string; name: string; path: string }[];
   defaultRepoId?: string | null;
   onRepoChange?: (repoId: string) => void;
+  actionQueue?: QueuedAction[];
+  onRemoveFromQueue?: (id: string) => void;
+  onClearQueue?: () => void;
 }
 
 export function CardDetailPanel({
   card, onClose, processingLogs, todos, activeQuestion, isLiveProcessing,
   onProcess, onExecuteCode, onAnswerQuestion, repos, defaultRepoId, onRepoChange,
+  actionQueue, onRemoveFromQueue, onClearQueue,
 }: CardDetailPanelProps) {
   const Icon = sourceIcons[card.source_type] || PenLine;
   const externalUrl = card.metadata?.url as string | undefined;
@@ -58,17 +62,10 @@ export function CardDetailPanel({
   const [customRequest, setCustomRequest] = useState("");
   const [answerText, setAnswerText] = useState("");
   const [width, setWidth] = useState(400);
-  const [logsExpanded, setLogsExpanded] = useState(true);
   const [todosExpanded, setTodosExpanded] = useState(true);
   const dragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
-
-  const logsEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [processingLogs?.length]);
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -94,9 +91,9 @@ export function CardDetailPanel({
   }, [width]);
 
   const isProcessing = isLiveProcessing && processingLogs && processingLogs.length > 0 && !processingLogs.some(l => l.step === "done");
-  const hasLogs = processingLogs && processingLogs.length > 0;
   const hasTodos = todos && todos.length > 0;
   const executionStatus = card.metadata?.execution_status as string | undefined;
+  const hasWorktree = !!card.metadata?.worktree_path;
 
   const planChecklist = parsePlanChecklist(card.body);
 
@@ -208,15 +205,23 @@ export function CardDetailPanel({
                   value={customRequest}
                   onChange={(e) => setCustomRequest(e.target.value)}
                   placeholder="e.g. delete this email, close the issue..."
-                  disabled={isProcessing}
-                  className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                  className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
-                <Button type="submit" size="sm" disabled={isProcessing}>
+                <Button type="submit" size="sm">
                   <Sparkles className="h-3 w-3 mr-1" />
-                  Run
+                  {isProcessing ? "Queue" : "Run"}
                 </Button>
               </form>
             </div>
+          )}
+
+          {/* Queued actions */}
+          {actionQueue && onRemoveFromQueue && onClearQueue && (
+            <QueuedActions
+              queue={actionQueue}
+              onRemove={onRemoveFromQueue}
+              onClear={onClearQueue}
+            />
           )}
 
           {card.proposed_action && (
@@ -317,26 +322,17 @@ export function CardDetailPanel({
             </div>
           )}
 
-          {hasLogs && (
-            <div>
-              <button
-                onClick={() => setLogsExpanded(!logsExpanded)}
-                className="flex items-center gap-1 text-sm font-medium mb-2 hover:text-foreground"
-              >
-                {logsExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                Execution Logs
-                {isProcessing && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground ml-1" />}
-              </button>
-              {logsExpanded && (
-                <div className="space-y-1.5 text-xs">
-                  {processingLogs!.map((log, i) => (
-                    <LogEntry key={i} log={log} />
-                  ))}
-                  <div ref={logsEndRef} />
-                </div>
-              )}
-            </div>
+          {/* Diff Viewer */}
+          {hasWorktree && (
+            <DiffViewer cardId={card.id} isExecuting={executionStatus === "running"} />
           )}
+
+          {/* Logs Panel */}
+          <LogsPanel
+            cardId={card.id}
+            liveLogs={processingLogs || []}
+            isLiveProcessing={!!isLiveProcessing}
+          />
 
           {card.metadata && Object.keys(card.metadata).length > 0 && (
             <div>
@@ -380,84 +376,6 @@ function TodoStatusIcon({ status }: { status: string }) {
       return <CircleDot className="h-3.5 w-3.5 text-amber-500 shrink-0" />;
     default:
       return <Circle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
-  }
-}
-
-function LogEntry({ log }: { log: ProcessingLog }) {
-  switch (log.step) {
-    case "start":
-    case "evaluating":
-    case "executing":
-      return (
-        <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
-          <Loader2 className="h-3 w-3 mt-0.5 animate-spin shrink-0" />
-          <span>{log.message}</span>
-        </div>
-      );
-    case "ai_output":
-      return (
-        <div className="pl-5 font-mono text-muted-foreground whitespace-pre-wrap break-all">
-          {log.message}
-        </div>
-      );
-    case "tool_start":
-      return (
-        <div className="flex items-start gap-2 text-purple-600 dark:text-purple-400">
-          <Wrench className="h-3 w-3 mt-0.5 shrink-0" />
-          <span className="font-medium">{log.message}</span>
-        </div>
-      );
-    case "tool_complete":
-      return (
-        <div className="flex items-start gap-2 text-purple-600 dark:text-purple-400">
-          <Terminal className="h-3 w-3 mt-0.5 shrink-0" />
-          <span className="font-mono text-xs">{log.message}</span>
-        </div>
-      );
-    case "tool_result":
-      return (
-        <div className="pl-5 font-mono text-xs text-muted-foreground whitespace-pre-wrap break-all bg-muted/50 rounded p-1.5 max-h-48 overflow-y-auto">
-          {log.message}
-        </div>
-      );
-    case "question":
-      return (
-        <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
-          <MessageCircleQuestion className="h-3 w-3 mt-0.5 shrink-0" />
-          <span className="font-medium">Q: {log.message}</span>
-        </div>
-      );
-    case "answer":
-      return (
-        <div className="flex items-start gap-2 text-blue-600 dark:text-blue-400">
-          <Send className="h-3 w-3 mt-0.5 shrink-0" />
-          <span>A: {log.message}</span>
-        </div>
-      );
-    case "todo":
-      return null;
-    case "done":
-    case "executed":
-      return (
-        <div className="flex items-start gap-2 text-green-600 dark:text-green-400">
-          <CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0" />
-          <span>{log.message}</span>
-        </div>
-      );
-    case "low_confidence":
-    case "error":
-      return (
-        <div className="flex items-start gap-2 text-red-600 dark:text-red-400">
-          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-          <span>{log.message}</span>
-        </div>
-      );
-    default:
-      return (
-        <div className="flex items-start gap-2 text-muted-foreground">
-          <span className="pl-5">{log.message}</span>
-        </div>
-      );
   }
 }
 

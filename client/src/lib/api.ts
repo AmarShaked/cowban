@@ -1,5 +1,5 @@
 // client/src/lib/api.ts
-import type { Board, Card, ColumnName } from "@daily-kanban/shared";
+import type { Board, Card, ColumnName, ExecutionSession, DiffResult } from "@daily-kanban/shared";
 
 const BASE = "/api";
 
@@ -179,6 +179,15 @@ export const api = {
 
   getExecutionLogs: (cardId: number) =>
     fetchJson<{ logs: import("@daily-kanban/shared").ExecutionLog[] }>(`/ai/logs/${cardId}`),
+
+  getSessions: (cardId: number) =>
+    fetchJson<{ sessions: ExecutionSession[] }>(`/ai/sessions/${cardId}`),
+
+  getSessionLogs: (sessionId: number) =>
+    fetchJson<{ logs: import("@daily-kanban/shared").ExecutionLog[] }>(`/ai/session-logs/${sessionId}`),
+
+  getDiff: (cardId: number) =>
+    fetchJson<DiffResult>(`/ai/diff/${cardId}`),
 
   answerQuestion: (
     cardId: number,

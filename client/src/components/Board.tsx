@@ -28,7 +28,7 @@ export function Board() {
     useBoard();
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
-  const { processingCardId, logs, todos, activeQuestion, startProcessing, startExecution, answerQuestion, loadHistoricalLogs } = useAiProcessing();
+  const { processingCardId, logs, todos, activeQuestion, actionQueue, startProcessing, startExecution, answerQuestion, loadHistoricalLogs, removeFromQueue, clearQueue } = useAiProcessing();
   const { theme, setTheme } = useTheme();
   const [repos, setRepos] = useState<{ id: string; name: string; path: string }[]>([]);
   const [defaultRepoId, setDefaultRepoId] = useState<string | null>(null);
@@ -188,9 +188,9 @@ export function Board() {
           <CardDetailPanel
             card={currentSelectedCard}
             onClose={() => setSelectedCard(null)}
-            processingLogs={processingCardId === currentSelectedCard.id ? logs : logs}
-            todos={processingCardId === currentSelectedCard.id ? todos : todos}
-            activeQuestion={processingCardId === currentSelectedCard.id ? activeQuestion : activeQuestion}
+            processingLogs={logs}
+            todos={todos}
+            activeQuestion={activeQuestion}
             isLiveProcessing={processingCardId === currentSelectedCard.id}
             onProcess={(customRequest) => startProcessing(currentSelectedCard.id, updateCard, customRequest)}
             onExecuteCode={() => startExecution(currentSelectedCard.id, updateCard)}
@@ -198,6 +198,9 @@ export function Board() {
             repos={repos}
             defaultRepoId={defaultRepoId}
             onRepoChange={(repoId) => handleRepoChange(currentSelectedCard.id, repoId)}
+            actionQueue={actionQueue}
+            onRemoveFromQueue={removeFromQueue}
+            onClearQueue={clearQueue}
           />
         )}
       </div>

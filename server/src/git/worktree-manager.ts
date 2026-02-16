@@ -103,6 +103,114 @@ export class WorktreeManager {
     }
   }
 
+  async getDiff(worktreePath: string): Promise<{
+    files: { path: string; status: string; additions: number; deletions: number; diff: string }[];
+    stats: { totalFiles: number; totalAdditions: number; totalDeletions: number };
+  }> {
+    // Find the merge base to diff against
+    let mergeBase = "";
+    try {
+      const { stdout: baseOut } = await execFileAsync(
+        "git",
+        ["-C", worktreePath, "merge-base", "HEAD", "origin/main"],
+        { timeout: 5000 },
+      );
+      mergeBase = baseOut.trim();
+    } catch {
+      // Fallback: diff against HEAD~1 or empty tree
+      try {
+        const { stdout: parentOut } = await execFileAsync(
+          "git",
+          ["-C", worktreePath, "rev-parse", "HEAD~1"],
+          { timeout: 5000 },
+        );
+        mergeBase = parentOut.trim();
+      } catch {
+        // Single commit or empty — use empty tree
+        mergeBase = "4b825dc642cb6eb9a060e54bf899d69f82559884";
+      }
+    }
+
+    // Get numstat for file stats
+    const { stdout: numstatOut } = await execFileAsync(
+      "git",
+      ["-C", worktreePath, "diff", "--numstat", mergeBase, "HEAD"],
+      { timeout: 10000 },
+    );
+
+    // Also include uncommitted working changes
+    const { stdout: workingNumstat } = await execFileAsync(
+      "git",
+      ["-C", worktreePath, "diff", "--numstat"],
+      { timeout: 10000 },
+    );
+
+    // Get unified diff
+    const { stdout: diffOut } = await execFileAsync(
+      "git",
+      ["-C", worktreePath, "diff", mergeBase, "HEAD"],
+      { timeout: 10000 },
+    );
+
+    const { stdout: workingDiff } = await execFileAsync(
+      "git",
+      ["-C", worktreePath, "diff"],
+      { timeout: 10000 },
+    );
+
+    // Parse numstat lines
+    const fileMap = new Map<string, { additions: number; deletions: number }>();
+    const parseNumstat = (output: string) => {
+      for (const line of output.trim().split("\n")) {
+        if (!line) continue;
+        const [add, del, filePath] = line.split("\t");
+        if (!filePath) continue;
+        const existing = fileMap.get(filePath) || { additions: 0, deletions: 0 };
+        existing.additions += add === "-" ? 0 : Number(add);
+        existing.deletions += del === "-" ? 0 : Number(del);
+        fileMap.set(filePath, existing);
+      }
+    };
+    parseNumstat(numstatOut);
+    parseNumstat(workingNumstat);
+
+    // Parse unified diff into per-file diffs
+    const combinedDiff = (diffOut + "\n" + workingDiff).trim();
+    const fileDiffs = new Map<string, string>();
+    if (combinedDiff) {
+      const parts = combinedDiff.split(/^diff --git /m).filter(Boolean);
+      for (const part of parts) {
+        const headerLine = part.split("\n")[0];
+        const match = headerLine.match(/b\/(.+)$/);
+        if (match) {
+          fileDiffs.set(match[1], "diff --git " + part);
+        }
+      }
+    }
+
+    // Build result
+    const files = Array.from(fileMap.entries()).map(([filePath, stats]) => {
+      let status = "modified";
+      if (stats.additions > 0 && stats.deletions === 0) status = "added";
+      if (stats.additions === 0 && stats.deletions > 0) status = "deleted";
+      return {
+        path: filePath,
+        status,
+        additions: stats.additions,
+        deletions: stats.deletions,
+        diff: fileDiffs.get(filePath) || "",
+      };
+    });
+
+    const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
+    const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
+
+    return {
+      files,
+      stats: { totalFiles: files.length, totalAdditions, totalDeletions },
+    };
+  }
+
   async createPR(worktreePath: string, title: string, body: string): Promise<string> {
     // Push the branch
     const { stdout: branchOut } = await execFileAsync(

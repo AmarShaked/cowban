@@ -12,4 +12,12 @@ export function migrate(db: Database.Database): void {
   db.exec(sql2);
   const sql3 = readFileSync(join(__dirname, "migrations", "003_card_position.sql"), "utf-8");
   db.exec(sql3);
+  const sql4 = readFileSync(join(__dirname, "migrations", "004_sessions.sql"), "utf-8");
+  db.exec(sql4);
+
+  // Add execution_session_id column to execution_logs if missing
+  const columns = db.pragma("table_info(execution_logs)") as { name: string }[];
+  if (!columns.some((c) => c.name === "execution_session_id")) {
+    db.exec("ALTER TABLE execution_logs ADD COLUMN execution_session_id INTEGER REFERENCES execution_sessions(id)");
+  }
 }

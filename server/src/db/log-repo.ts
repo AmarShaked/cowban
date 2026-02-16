@@ -17,13 +17,14 @@ export class LogRepo {
     message: string,
     sessionId: string | null,
     data: Record<string, unknown> | null,
+    executionSessionId?: number,
   ): ExecutionLog {
     const result = this.db
       .prepare(
-        `INSERT INTO execution_logs (card_id, session_id, step, message, data)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO execution_logs (card_id, session_id, step, message, data, execution_session_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
-      .run(cardId, sessionId, step, message, data ? JSON.stringify(data) : null);
+      .run(cardId, sessionId, step, message, data ? JSON.stringify(data) : null, executionSessionId || null);
 
     return this.getById(Number(result.lastInsertRowid))!;
   }
@@ -37,6 +38,13 @@ export class LogRepo {
     const rows = this.db
       .prepare("SELECT * FROM execution_logs WHERE card_id = ? ORDER BY created_at ASC, id ASC")
       .all(cardId) as Record<string, unknown>[];
+    return rows.map(rowToLog);
+  }
+
+  listBySession(executionSessionId: number): ExecutionLog[] {
+    const rows = this.db
+      .prepare("SELECT * FROM execution_logs WHERE execution_session_id = ? ORDER BY created_at ASC, id ASC")
+      .all(executionSessionId) as Record<string, unknown>[];
     return rows.map(rowToLog);
   }
 
