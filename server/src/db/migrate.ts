@@ -10,8 +10,12 @@ export function migrate(db: Database.Database): void {
   db.exec(sql1);
   const sql2 = readFileSync(join(__dirname, "migrations", "002_execution_logs.sql"), "utf-8");
   db.exec(sql2);
-  const sql3 = readFileSync(join(__dirname, "migrations", "003_card_position.sql"), "utf-8");
-  db.exec(sql3);
+  // 003: Add position column to cards (idempotent)
+  const cardCols = db.pragma("table_info(cards)") as { name: string }[];
+  if (!cardCols.some((c) => c.name === "position")) {
+    db.exec("ALTER TABLE cards ADD COLUMN position REAL DEFAULT 0");
+    db.exec("UPDATE cards SET position = id WHERE position = 0");
+  }
   const sql4 = readFileSync(join(__dirname, "migrations", "004_sessions.sql"), "utf-8");
   db.exec(sql4);
 
