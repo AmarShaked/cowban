@@ -24,6 +24,7 @@ export interface Card {
   proposed_action: string | null;
   action_payload: Record<string, unknown> | null;
   execution_result: string | null;
+  position: number;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +70,7 @@ export interface CreateCardRequest {
 
 export interface MoveCardRequest {
   column_name: ColumnName;
+  position?: number;
 }
 
 export interface ToggleAiRequest {

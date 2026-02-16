@@ -10,4 +10,6 @@ export function migrate(db: Database.Database): void {
   db.exec(sql1);
   const sql2 = readFileSync(join(__dirname, "migrations", "002_execution_logs.sql"), "utf-8");
   db.exec(sql2);
+  const sql3 = readFileSync(join(__dirname, "migrations", "003_card_position.sql"), "utf-8");
+  db.exec(sql3);
 }

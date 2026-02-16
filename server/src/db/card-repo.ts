@@ -30,10 +30,15 @@ export class CardRepo {
   constructor(private db: Database.Database) {}
 
   create(input: CreateCardInput): Card {
+    const maxPos = this.db
+      .prepare("SELECT COALESCE(MAX(position), 0) as max_pos FROM cards WHERE board_id = ?")
+      .get(input.board_id) as { max_pos: number };
+    const position = maxPos.max_pos + 1;
+
     const result = this.db
       .prepare(
-        `INSERT INTO cards (board_id, source_id, source_type, title, body, metadata)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO cards (board_id, source_id, source_type, title, body, metadata, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         input.board_id,
@@ -41,7 +46,8 @@ export class CardRepo {
         input.source_type,
         input.title,
         input.body,
-        input.metadata ? JSON.stringify(input.metadata) : null
+        input.metadata ? JSON.stringify(input.metadata) : null,
+        position
       );
 
     return this.getById(Number(result.lastInsertRowid))!;
@@ -63,15 +69,21 @@ export class CardRepo {
 
   listByBoard(boardId: number): Card[] {
     const rows = this.db
-      .prepare("SELECT * FROM cards WHERE board_id = ? ORDER BY created_at ASC")
+      .prepare("SELECT * FROM cards WHERE board_id = ? ORDER BY position ASC, created_at ASC")
       .all(boardId) as Record<string, unknown>[];
     return rows.map(rowToCard);
   }
 
-  moveToColumn(id: number, column: ColumnName): void {
+  moveToColumn(id: number, column: ColumnName, position?: number): void {
+    if (position === undefined) {
+      const maxPos = this.db
+        .prepare("SELECT COALESCE(MAX(position), 0) as max_pos FROM cards WHERE board_id = (SELECT board_id FROM cards WHERE id = ?)")
+        .get(id) as { max_pos: number };
+      position = maxPos.max_pos + 1;
+    }
     this.db
-      .prepare("UPDATE cards SET column_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(column, id);
+      .prepare("UPDATE cards SET column_name = ?, position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(column, position, id);
   }
 
   setAiToggle(id: number, value: boolean): void {

@@ -28,8 +28,13 @@ export function useBoard() {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  const moveCard = useCallback(async (cardId: number, column: ColumnName) => {
-    const updated = await api.moveCard(cardId, column);
+  const moveCard = useCallback(async (cardId: number, column: ColumnName, position: number) => {
+    // Optimistic update
+    setCards((prev) =>
+      prev.map((c) => (c.id === cardId ? { ...c, column_name: column, position } : c))
+    );
+
+    const updated = await api.moveCard(cardId, column, position);
     setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
 
     if (column === "ai_do") {
@@ -57,7 +62,7 @@ export function useBoard() {
   }, []);
 
   const cardsByColumn = (column: ColumnName) =>
-    cards.filter((c) => c.column_name === column);
+    cards.filter((c) => c.column_name === column).sort((a, b) => a.position - b.position);
 
   return {
     board,
